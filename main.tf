@@ -106,7 +106,7 @@
 #   value       = aws_internet_gateway.igw.id
 # }
 provider "aws" {
-  region = var.aws_region
+  region  = var.aws_region
   profile = var.aws_profile
 
 }
