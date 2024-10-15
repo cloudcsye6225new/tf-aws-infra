@@ -122,7 +122,7 @@ data "aws_availability_zones" "available" {
   state = "available"
 }
 
-resource "aws_subnet" "public_subnets" {
+ resource "aws_subnet" "public_subnets" {
   count             = 3
   vpc_id            = aws_vpc.main_vpc.id
   cidr_block        = cidrsubnet(var.vpc_cidr, 4, count.index)
@@ -133,7 +133,7 @@ resource "aws_subnet" "public_subnets" {
   map_public_ip_on_launch = true
 }
 
-resource "aws_subnet" "private_subnets" {
+ resource "aws_subnet" "private_subnets" {
   count             = 3
   vpc_id            = aws_vpc.main_vpc.id
   cidr_block        = cidrsubnet(var.vpc_cidr, 4, count.index + 3)
@@ -143,7 +143,7 @@ resource "aws_subnet" "private_subnets" {
   }
 }
 
-resource "aws_internet_gateway" "main_igw" {
+ resource "aws_internet_gateway" "main_igw" {
   vpc_id = aws_vpc.main_vpc.id
   tags = {
     Name = "${var.project_name}-igw"
