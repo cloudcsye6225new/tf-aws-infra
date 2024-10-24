@@ -106,6 +106,24 @@ resource "aws_db_subnet_group" "main_rds_subnet_group" {
   }
 }
 
+resource "aws_db_parameter_group" "custom_rds_pg" {
+  name   = "${var.project_name}-custom-rds-pg"
+  family = var.db_engine_family
+
+  parameter {
+    name         = "max_connections"
+    value        = "100"
+    apply_method = "pending-reboot" # Change to 'pending-reboot' for static parameters
+  }
+
+  # Add other custom parameters here
+
+  tags = {
+    Name = "${var.project_name}-custom-rds-pg"
+  }
+}
+
+
 resource "aws_db_instance" "main_rds" {
   allocated_storage      = 20
   engine                 = var.db_engine
@@ -119,7 +137,7 @@ resource "aws_db_instance" "main_rds" {
   skip_final_snapshot    = true
   publicly_accessible    = false
   multi_az               = false
-
+  parameter_group_name   = aws_db_parameter_group.custom_rds_pg.name
   tags = {
     Name = "${var.project_name}-rds"
   }
