@@ -1,23 +1,3 @@
-# variable "aws_region" {
-#   description = "AWS region where resources will be created"
-#   type        = string
-# }
-
-# variable "aws_profile" {
-#   description = "AWS profile to use for authentication"
-#   type        = string
-# }
-
-# variable "project_name" {
-#   description = "Name of the project, used as a prefix for resource names"
-#   type        = string
-# }
-
-# variable "vpc_cidr" {
-#   description = "CIDR block for the VPC"
-#   type        = string
-# }
-
 variable "aws_region" {
   description = "AWS region"
   type        = string
@@ -51,5 +31,35 @@ variable "key_pair_name" {
 variable "instance_type" {
   description = "EC2 instance type"
   type        = string
-  default     = "t2.micro"
+
+}
+variable "db_engine" {
+  description = "Database engine type (e.g., MySQL, PostgreSQL)"
+  type        = string
+
+}
+
+variable "db_username" {
+  description = "Master username for the database"
+  type        = string
+}
+
+variable "db_password" {
+  description = "Master password for the database"
+  type        = string
+}
+
+variable "db_instance_identifier" {
+  description = "RDS instance identifier"
+  type        = string
+}
+
+variable "db_name" {
+  description = "Database name"
+  type        = string
+}
+
+variable "db_port" {
+  description = "Database port (3306 for MySQL/MariaDB, 5432 for PostgreSQL)"
+  type        = number
 }
