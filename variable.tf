@@ -63,3 +63,7 @@ variable "db_port" {
   description = "Database port (3306 for MySQL/MariaDB, 5432 for PostgreSQL)"
   type        = number
 }
+variable "db_engine_family" {
+  description = "db version which we are using"
+  type        = string
+}
