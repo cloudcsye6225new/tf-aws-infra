@@ -232,10 +232,10 @@ resource "aws_instance" "web_app" {
               echo "S3_BUCKET_NAME=${var.bucket_name}" >> /opt/csye6225/App_Test/app.env
 
               # Make the file readable by your application (adjust permissions as needed)
+              sudo chown csye6225:csye6225 /opt/csye6225/App_Test/app.env
               chmod 644 /opt/csye6225/App_Test/app.env
               # Running the cloud watch
-              sudo systemctl start amazon-cloudwatch-agent
-              sudo /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -c file:/opt/csye6225/App_Test/amazon-cloudwatch-agent.json -s
+              sudo /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -c file:/opt/csye6225/App_Test/amazon-cloudwatch-agent.json -s
               EOF
   root_block_device {
     volume_size           = 25
