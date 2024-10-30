@@ -67,3 +67,8 @@ variable "db_engine_family" {
   description = "db version which we are using"
   type        = string
 }
+variable "bucket_name" {
+  description = "This is a S3 bucket name"
+  type        = string
+
+}

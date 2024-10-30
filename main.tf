@@ -14,6 +14,13 @@ data "aws_availability_zones" "available" {
   state = "available"
 }
 
+
+
+variable "domain_name" {
+  description = "Your domain name"
+  type        = string
+}
+
 resource "aws_subnet" "public_subnets" {
   count             = 3
   vpc_id            = aws_vpc.main_vpc.id
@@ -211,6 +218,8 @@ resource "aws_instance" "web_app" {
   key_name               = var.key_pair_name
   vpc_security_group_ids = [aws_security_group.web_app_sg.id]
   subnet_id              = aws_subnet.public_subnets[0].id
+  iam_instance_profile   = aws_iam_instance_profile.combined_profile.name
+
 
   user_data = <<-EOF
               #!/bin/bash
@@ -220,9 +229,13 @@ resource "aws_instance" "web_app" {
               echo "DB_PASSWORD=${var.db_password}" >> /opt/csye6225/App_Test/app.env
               echo "DB_NAME=${var.db_name}" >> /opt/csye6225/App_Test/app.env
               echo "DB_PORT=${var.db_port}" >> /opt/csye6225/App_Test/app.env
+              echo "S3_BUCKET_NAME=${var.bucket_name}" >> /opt/csye6225/App_Test/app.env
 
               # Make the file readable by your application (adjust permissions as needed)
               chmod 644 /opt/csye6225/App_Test/app.env
+              # Running the cloud watch
+              sudo systemctl start amazon-cloudwatch-agent
+              sudo /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -c file:/opt/csye6225/App_Test/amazon-cloudwatch-agent.json -s
               EOF
   root_block_device {
     volume_size           = 25
@@ -235,4 +248,139 @@ resource "aws_instance" "web_app" {
   tags = {
     Name = "${var.project_name}-web-app-instance"
   }
+}
+
+// S3 BUCKET IMPLEMENTATION 
+resource "random_uuid" "bucket_name" {
+}
+
+resource "aws_s3_bucket" "private_bucket" {
+  bucket        = "webapp-profile-pictures"
+  force_destroy = true
+
+  tags = {
+    Name = "${var.project_name}-s3-bucket"
+  }
+}
+
+resource "aws_s3_bucket_public_access_block" "private_bucket" {
+  bucket = aws_s3_bucket.private_bucket.id
+
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "bucket_encryption" {
+  bucket = aws_s3_bucket.private_bucket.id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "bucket_lifecycle" {
+  bucket = aws_s3_bucket.private_bucket.id
+
+  rule {
+    id     = "transition-to-ia"
+    status = "Enabled"
+
+    transition {
+      days          = 30
+      storage_class = "STANDARD_IA"
+    }
+  }
+}
+
+resource "aws_iam_policy" "s3_access_policy" {
+  name        = "${var.project_name}-cloudwatch-s3-policy"
+  description = "Policy for CloudWatch and S3 access for EC2 instance"
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement : [
+      {
+        Effect : "Allow",
+        Action : [
+          "logs:CreateLogGroup",
+          "logs:CreateLogStream",
+          "logs:PutLogEvents",
+          "logs:DescribeLogStreams"
+        ],
+        Resource : [
+          "arn:aws:logs:*:*:*"
+        ]
+      },
+      {
+        Effect : "Allow",
+        Action : [
+          "cloudwatch:PutMetricData"
+        ],
+        Resource : "*"
+      },
+      {
+        Effect : "Allow",
+        Action : [
+          "s3:GetObject",
+          "s3:PutObject",
+          "s3:DeleteObject",
+          "s3:ListBucket"
+        ],
+        Resource : [
+          "arn:aws:s3:::webapp-profile-pictures",
+          "arn:aws:s3:::webapp-profile-pictures/*"
+        ]
+      }
+    ]
+  })
+
+}
+
+data "aws_route53_zone" "main" {
+  name         = "${var.aws_profile}.${var.domain_name}"
+  private_zone = false
+}
+
+resource "aws_route53_record" "web_app" {
+  zone_id = data.aws_route53_zone.main.zone_id
+  name    = "${var.aws_profile}.${var.domain_name}"
+  type    = "A"
+  ttl     = "300"
+  records = [aws_instance.web_app.public_ip]
+}
+
+
+// Cloud Watch Agent Policyh 
+resource "aws_iam_role" "combined_role" {
+  name = "${var.project_name}-combined-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          Service = "ec2.amazonaws.com"
+        }
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "s3_policy_attachment" {
+  role       = aws_iam_role.combined_role.name # Update to use combined_role
+  policy_arn = aws_iam_policy.s3_access_policy.arn
+}
+
+resource "aws_iam_role_policy_attachment" "cloudwatch_policy_attachment" {
+  role       = aws_iam_role.combined_role.name
+  policy_arn = "arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy"
+}
+resource "aws_iam_instance_profile" "combined_profile" {
+  name = "${var.project_name}-combined-profile"
+  role = aws_iam_role.combined_role.name
 }
