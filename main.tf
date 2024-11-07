@@ -167,6 +167,13 @@ resource "aws_security_group" "load_balancer_sg" {
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
+  ingress {
+    from_port   = var.app_port
+    to_port     = var.app_port
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+
+  }
 
   egress {
     from_port   = 0
@@ -196,7 +203,7 @@ resource "aws_security_group" "web_app_sg" {
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+    cidr_blocks = aws_subnet.private_subnets[*].cidr_block
   }
 
   egress {
@@ -225,7 +232,7 @@ resource "aws_lb" "web_app_alb" {
 
 resource "aws_lb_target_group" "web_app_tg" {
   name        = "${var.project_name}-tg"
-  port        = 8000
+  port        = var.app_port
   protocol    = "HTTP"
   vpc_id      = aws_vpc.main_vpc.id
   target_type = "instance"
@@ -246,7 +253,7 @@ resource "aws_lb_target_group" "web_app_tg" {
 
 resource "aws_lb_listener" "web_app_listener" {
   load_balancer_arn = aws_lb.web_app_alb.arn
-  port              = 80
+  port              = var.app_port
   protocol          = "HTTP"
 
   default_action {
@@ -273,12 +280,20 @@ data "aws_ami" "custom_ami" {
 resource "aws_launch_template" "web_app_launch_template" {
   name_prefix   = "${var.project_name}-launch-template"
   image_id      = data.aws_ami.custom_ami.id
-  instance_type = "t2.micro"
+  instance_type = var.instance_type # Define instance type in variable
   key_name      = var.key_pair_name
 
   network_interfaces {
     security_groups             = [aws_security_group.web_app_sg.id]
     associate_public_ip_address = true
+  }
+
+  iam_instance_profile {
+    name = aws_iam_instance_profile.combined_profile.name
+  }
+
+  monitoring {
+    enabled = true
   }
 
   user_data = base64encode(<<-EOF
@@ -301,7 +316,6 @@ resource "aws_launch_template" "web_app_launch_template" {
 
   tag_specifications {
     resource_type = "instance"
-
     tags = {
       Name = "${var.project_name}-asg-instance"
     }
@@ -314,31 +328,22 @@ resource "aws_autoscaling_group" "web_app_asg" {
   min_size                  = 3
   vpc_zone_identifier       = aws_subnet.public_subnets[*].id
   health_check_type         = "EC2"
-  health_check_grace_period = 300
+  health_check_grace_period = 150
   target_group_arns         = [aws_lb_target_group.web_app_tg.arn]
-
-  mixed_instances_policy {
-    launch_template {
-      launch_template_specification {
-        launch_template_id = aws_launch_template.web_app_launch_template.id
-        version            = "$Latest"
-      }
-    }
-
-    instances_distribution {
-      on_demand_percentage_above_base_capacity = 100
-    }
+  enabled_metrics           = ["GroupMinSize", "GroupMaxSize", "GroupDesiredCapacity", "GroupInServiceInstances", "GroupPendingInstances", "GroupStandbyInstances", "GroupTerminatingInstances", "GroupTotalInstances"]
+  launch_template {
+    id      = aws_launch_template.web_app_launch_template.id
+    version = "$Latest"
   }
 
   tag {
     key                 = "Name"
-    value               = "${var.project_name}-asg-instance"
+    value               = "csye6225_asg"
     propagate_at_launch = true
   }
 }
 
-
-
+# Scaling Policies
 resource "aws_autoscaling_policy" "scale_up" {
   name                   = "${var.project_name}-scale-up"
   scaling_adjustment     = 1
@@ -376,6 +381,7 @@ resource "aws_route53_record" "web_app_dns" {
   }
 }
 
+# Scale Up CloudWatch Alarm - Trigger when CPU usage is above 5%
 resource "aws_cloudwatch_metric_alarm" "cpu_high" {
   alarm_name          = "${var.project_name}-high-cpu"
   comparison_operator = "GreaterThanThreshold"
@@ -384,13 +390,14 @@ resource "aws_cloudwatch_metric_alarm" "cpu_high" {
   namespace           = "AWS/EC2"
   period              = 120
   statistic           = "Average"
-  threshold           = 12
+  threshold           = 5
   alarm_actions       = [aws_autoscaling_policy.scale_up.arn]
   dimensions = {
     AutoScalingGroupName = aws_autoscaling_group.web_app_asg.name
   }
 }
 
+# Scale Down CloudWatch Alarm - Trigger when CPU usage is below 3%
 resource "aws_cloudwatch_metric_alarm" "cpu_low" {
   alarm_name          = "${var.project_name}-low-cpu"
   comparison_operator = "LessThanThreshold"
@@ -399,7 +406,7 @@ resource "aws_cloudwatch_metric_alarm" "cpu_low" {
   namespace           = "AWS/EC2"
   period              = 120
   statistic           = "Average"
-  threshold           = 8
+  threshold           = 3
   alarm_actions       = [aws_autoscaling_policy.scale_down.arn]
   dimensions = {
     AutoScalingGroupName = aws_autoscaling_group.web_app_asg.name
@@ -490,8 +497,8 @@ resource "aws_iam_policy" "s3_access_policy" {
           "s3:ListBucket"
         ],
         Resource : [
-          "arn:aws:s3:::webapp-profile-pictures",
-          "arn:aws:s3:::webapp-profile-pictures/*"
+          "${aws_s3_bucket.private_bucket.arn}",
+          "${aws_s3_bucket.private_bucket.arn}/*"
         ]
       }
     ]
