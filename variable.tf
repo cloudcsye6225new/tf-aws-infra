@@ -76,3 +76,11 @@ variable "domain_name" {
   description = "This is the domain name"
   type        = string
 }
+
+variable "cpu_high" {
+  description = "This is cpu high value"
+
+}
+variable "cpu_low" {
+  description = "This is cpu low value"
+}
