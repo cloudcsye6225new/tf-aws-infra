@@ -199,11 +199,17 @@ resource "aws_security_group" "web_app_sg" {
     security_groups = [aws_security_group.load_balancer_sg.id]
   }
 
+  # ingress {
+  #   from_port   = 22
+  #   to_port     = 22
+  #   protocol    = "tcp"
+  #   cidr_blocks = aws_subnet.private_subnets[*].cidr_block
+  # }
   ingress {
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
-    cidr_blocks = aws_subnet.private_subnets[*].cidr_block
+    cidr_blocks = ["0.0.0.0/0"]
   }
 
   egress {
@@ -253,7 +259,7 @@ resource "aws_lb_target_group" "web_app_tg" {
 
 resource "aws_lb_listener" "web_app_listener" {
   load_balancer_arn = aws_lb.web_app_alb.arn
-  port              = var.app_port
+  port              = 80
   protocol          = "HTTP"
 
   default_action {
@@ -328,7 +334,7 @@ resource "aws_autoscaling_group" "web_app_asg" {
   min_size                  = 3
   vpc_zone_identifier       = aws_subnet.public_subnets[*].id
   health_check_type         = "EC2"
-  health_check_grace_period = 150
+  health_check_grace_period = 60
   target_group_arns         = [aws_lb_target_group.web_app_tg.arn]
   enabled_metrics           = ["GroupMinSize", "GroupMaxSize", "GroupDesiredCapacity", "GroupInServiceInstances", "GroupPendingInstances", "GroupStandbyInstances", "GroupTerminatingInstances", "GroupTotalInstances"]
   launch_template {
@@ -388,9 +394,9 @@ resource "aws_cloudwatch_metric_alarm" "cpu_high" {
   evaluation_periods  = 2
   metric_name         = "CPUUtilization"
   namespace           = "AWS/EC2"
-  period              = 120
+  period              = 60
   statistic           = "Average"
-  threshold           = 5
+  threshold           = var.cpu_high
   alarm_actions       = [aws_autoscaling_policy.scale_up.arn]
   dimensions = {
     AutoScalingGroupName = aws_autoscaling_group.web_app_asg.name
@@ -404,9 +410,9 @@ resource "aws_cloudwatch_metric_alarm" "cpu_low" {
   evaluation_periods  = 2
   metric_name         = "CPUUtilization"
   namespace           = "AWS/EC2"
-  period              = 120
+  period              = 60
   statistic           = "Average"
-  threshold           = 3
+  threshold           = var.cpu_low
   alarm_actions       = [aws_autoscaling_policy.scale_down.arn]
   dimensions = {
     AutoScalingGroupName = aws_autoscaling_group.web_app_asg.name
