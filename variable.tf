@@ -67,11 +67,6 @@ variable "db_engine_family" {
   description = "db version which we are using"
   type        = string
 }
-variable "bucket_name" {
-  description = "This is a S3 bucket name"
-  type        = string
-
-}
 variable "domain_name" {
   description = "This is the domain name"
   type        = string
@@ -83,4 +78,9 @@ variable "cpu_high" {
 }
 variable "cpu_low" {
   description = "This is cpu low value"
+}
+
+variable "send_grid_api_key" {
+  description = "This is an Api Key"
+
 }
