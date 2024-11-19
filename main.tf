@@ -167,19 +167,13 @@ resource "aws_security_group" "load_balancer_sg" {
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
-  ingress {
-    from_port   = var.app_port
-    to_port     = var.app_port
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-
-  }
 
   egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
+    from_port        = 0
+    to_port          = 0
+    protocol         = "-1"
+    cidr_blocks      = ["0.0.0.0/0"] # Allow all IPv4
+    ipv6_cidr_blocks = ["::/0"]      # Allow all IPv6
   }
 
   tags = {
@@ -204,6 +198,7 @@ resource "aws_security_group" "web_app_sg" {
     to_port     = 22
     protocol    = "tcp"
     cidr_blocks = aws_subnet.private_subnets[*].cidr_block
+    # cidr_blocks = ["0.0.0.0/0"]
   }
 
 
@@ -271,7 +266,7 @@ data "aws_ami" "custom_ami" {
     name   = "name"
     values = ["network_fall_2024-webapp*"]
   }
-
+  # $latest
   filter {
     name   = "state"
     values = ["available"]
@@ -279,7 +274,7 @@ data "aws_ami" "custom_ami" {
 }
 
 resource "aws_launch_template" "web_app_launch_template" {
-  name_prefix   = "${var.project_name}-launch-template"
+  name          = "${var.project_name}-launch-template"
   image_id      = data.aws_ami.custom_ami.id
   instance_type = var.instance_type # Define instance type in variable
   key_name      = var.key_pair_name
@@ -306,7 +301,8 @@ resource "aws_launch_template" "web_app_launch_template" {
               echo "DB_NAME=${var.db_name}" >> /opt/csye6225/App_Test/app.env
               echo "DB_PORT=${var.db_port}" >> /opt/csye6225/App_Test/app.env
               echo "S3_BUCKET_NAME=${aws_s3_bucket.private_bucket.id}" >> /opt/csye6225/App_Test/app.env
-
+              echo "SNS_TOPIC_ARN=${aws_sns_topic.user_verification.arn}" >> /opt/csye6225/App_Test/app.env
+              echo "Region=${var.aws_region}" >> /opt/csye6225/App_Test/app.env 
               # Make the file readable by your application (adjust permissions as needed)
               sudo chown csye6225:csye6225 /opt/csye6225/App_Test/app.env
               chmod 644 /opt/csye6225/App_Test/app.env
@@ -324,6 +320,7 @@ resource "aws_launch_template" "web_app_launch_template" {
 }
 
 resource "aws_autoscaling_group" "web_app_asg" {
+  name                      = "custom_autoscaling_group"
   desired_capacity          = 3
   max_size                  = 5
   min_size                  = 3
@@ -422,14 +419,18 @@ resource "aws_cloudwatch_metric_alarm" "cpu_low" {
 #*****************************************This needs to be changed to launh template****************************************************
 
 #*****************************************This needs to be changed to launh template****************************************************
+
+resource "random_uuid" "bucket_uuid" {}
+
 resource "aws_s3_bucket" "private_bucket" {
-  bucket        = "${var.project_name}-s3-bucket-${uuid()}"
+  bucket        = "${var.project_name}-s3-bucket-${random_uuid.bucket_uuid.result}"
   force_destroy = true
 
   tags = {
     Name = "${var.project_name}-s3-bucket"
   }
 }
+
 
 resource "aws_s3_bucket_public_access_block" "private_bucket" {
   bucket = aws_s3_bucket.private_bucket.id
@@ -539,4 +540,111 @@ resource "aws_iam_role_policy_attachment" "cloudwatch_policy_attachment" {
 resource "aws_iam_instance_profile" "combined_profile" {
   name = "${var.project_name}-combined-profile"
   role = aws_iam_role.combined_role.name
+}
+# Attach SNS Full Access Policy
+resource "aws_iam_role_policy_attachment" "sns_policy_attachment" {
+  role       = aws_iam_role.combined_role.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonSNSFullAccess"
+}
+
+#**********************************************************************************************************************************************
+
+#Lambda Function and SNS
+
+resource "aws_sns_topic" "user_verification" {
+  name = "user-verification-topic"
+}
+
+data "archive_file" "lambda_zip" {
+  type             = "zip"
+  source_dir       = "../Serverless-fork/venv/Lib/site-packages" # Path to the directory to zip
+  output_file_mode = "0666"
+  output_path      = "${path.module}/function.zip" # Output file in the current directory
+}
+
+resource "aws_lambda_function" "verification_email_lambda" {
+  function_name = "send-verification-email"
+  role          = aws_iam_role.lambda_role.arn
+  handler       = "lambda.lambda_handler"
+  runtime       = "python3.9"
+
+  filename         = data.archive_file.lambda_zip.output_path
+  source_code_hash = data.archive_file.lambda_zip.output_base64sha256
+
+  environment {
+    variables = {
+      DOMAIN           = "${var.aws_profile}.${var.domain_name}"
+      SENDGRID_API_KEY = var.send_grid_api_key
+      base_url         = var.domain_name
+      sns_topic_arn    = aws_sns_topic.user_verification.arn
+      RDS_HOST         = aws_s3_bucket.private_bucket.id
+      DB_NAME          = var.db_name
+      DB_USER          = var.db_username
+      DB_PASSWORD      = var.db_password
+    }
+  }
+
+}
+
+resource "aws_iam_role" "lambda_role" {
+  name = "verification-email-lambda-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          Service = "lambda.amazonaws.com"
+        }
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "lambda_basic_execution" {
+  policy_arn = aws_iam_policy.lambda_exec_policy.arn
+  role       = aws_iam_role.lambda_role.name
+}
+
+resource "aws_iam_policy" "lambda_exec_policy" {
+  name        = "UserVerificationLambdaExecPolicy"
+  description = "Policy to allow Lambda function to access SNS, RDS, and CloudWatch."
+
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Effect = "Allow",
+        Action = [
+          "sns:Publish",
+          "cloudwatch:PutMetricData",
+          "logs:CreateLogGroup",
+          "logs:CreateLogStream",
+          "logs:PutLogEvents"
+        ],
+        Resource = "*"
+      },
+      {
+        Effect   = "Allow",
+        Action   = ["ses:SendEmail", "ses:SendRawEmail"],
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+resource "aws_lambda_permission" "allow_sns" {
+  statement_id  = "AllowSNSInvoke"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.verification_email_lambda.function_name
+  principal     = "sns.amazonaws.com"
+  source_arn    = aws_sns_topic.user_verification.arn
+}
+
+resource "aws_sns_topic_subscription" "lambda_subscription" {
+  topic_arn = aws_sns_topic.user_verification.arn
+  protocol  = "lambda"
+  endpoint  = aws_lambda_function.verification_email_lambda.arn
 }
