@@ -557,7 +557,7 @@ resource "aws_sns_topic" "user_verification" {
 
 data "archive_file" "lambda_zip" {
   type             = "zip"
-  source_dir       = "../Serverless-fork/venv/Lib/site-packages" # Path to the directory to zip
+  source_dir       = "../serverless/venv/Lib/site-packages" # Path to the directory to zip
   output_file_mode = "0666"
   output_path      = "${path.module}/function.zip" # Output file in the current directory
 }
