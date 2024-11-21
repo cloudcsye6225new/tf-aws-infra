@@ -543,8 +543,9 @@ resource "aws_iam_instance_profile" "combined_profile" {
 }
 # Attach SNS Full Access Policy
 resource "aws_iam_role_policy_attachment" "sns_policy_attachment" {
-  role       = aws_iam_role.combined_role.name
-  policy_arn = "arn:aws:iam::aws:policy/AmazonSNSFullAccess"
+  role = aws_iam_role.combined_role.name
+  # policy_arn = "arn:aws:iam::aws:policy/AmazonSNSFullAccess"
+  policy_arn = aws_iam_policy.lambda_exec_policy.arn
 }
 
 #**********************************************************************************************************************************************
