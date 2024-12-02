@@ -84,3 +84,11 @@ variable "send_grid_api_key" {
   description = "This is an Api Key"
 
 }
+
+variable "demo_account_id" {
+
+
+}
+variable "dev_account_id" {
+
+}
