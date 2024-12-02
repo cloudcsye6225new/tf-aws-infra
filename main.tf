@@ -251,7 +251,7 @@ resource "aws_lb_listener" "web_app_listener" {
 
   ssl_policy = "ELBSecurityPolicy-2016-08" # Choose the desired policy
 
-  certificate_arn = "arn:aws:acm:us-east-1:650251683434:certificate/05c425b3-3dc0-4abf-a04d-4b345653a0a2" # Replace with your ACM certificate's ARN
+  certificate_arn = var.ssl_certificate # Replace with your ACM certificate's ARN
 
   default_action {
     type             = "forward"

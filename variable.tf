@@ -92,3 +92,6 @@ variable "demo_account_id" {
 variable "dev_account_id" {
 
 }
+variable "ssl_certificate" {
+
+}
