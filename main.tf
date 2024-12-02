@@ -494,9 +494,9 @@ resource "aws_launch_template" "web_app_launch_template" {
 
 resource "aws_autoscaling_group" "web_app_asg" {
   name                      = "custom_autoscaling_group"
-  desired_capacity          = 1
+  desired_capacity          = 3
   max_size                  = 5
-  min_size                  = 1
+  min_size                  = 3
   vpc_zone_identifier       = aws_subnet.public_subnets[*].id
   health_check_type         = "EC2"
   health_check_grace_period = 60
