@@ -132,13 +132,15 @@ resource "aws_db_instance" "main_rds" {
   db_subnet_group_name   = aws_db_subnet_group.main_rds_subnet_group.name
   identifier             = var.db_instance_identifier
   username               = var.db_username
-  password               = var.db_password
+  password               = random_password.db_password.result
   db_name                = var.db_name
   vpc_security_group_ids = [aws_security_group.db_sg.id]
   skip_final_snapshot    = true
   publicly_accessible    = false
   multi_az               = false
   parameter_group_name   = aws_db_parameter_group.custom_rds_pg.name
+  kms_key_id             = aws_kms_key.rds_kms_key.arn
+  storage_encrypted      = true
   tags = {
     Name = "${var.project_name}-rds"
   }
@@ -154,12 +156,12 @@ resource "aws_security_group" "load_balancer_sg" {
   description = "Security group for Load Balancer"
   vpc_id      = aws_vpc.main_vpc.id
 
-  ingress {
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
+  # ingress {
+  #   from_port   = 80
+  #   to_port     = 80
+  #   protocol    = "tcp"
+  #   cidr_blocks = ["0.0.0.0/0"]
+  # }
 
   ingress {
     from_port   = 443
@@ -187,7 +189,7 @@ resource "aws_security_group" "web_app_sg" {
   vpc_id      = aws_vpc.main_vpc.id
 
   ingress {
-    from_port       = var.app_port # Adjust as per your app port
+    from_port       = var.app_port
     to_port         = var.app_port
     protocol        = "tcp"
     security_groups = [aws_security_group.load_balancer_sg.id]
@@ -227,30 +229,29 @@ resource "aws_lb" "web_app_alb" {
 }
 
 resource "aws_lb_target_group" "web_app_tg" {
-  name        = "${var.project_name}-tg"
-  port        = var.app_port
-  protocol    = "HTTP"
-  vpc_id      = aws_vpc.main_vpc.id
-  target_type = "instance"
+  name     = "my-target-group"
+  port     = var.app_port
+  protocol = "HTTP"
+  vpc_id   = aws_vpc.main_vpc.id
 
   health_check {
-    path                = "/healthz"
+    path                = "/"
     protocol            = "HTTP"
     interval            = 30
     timeout             = 5
-    healthy_threshold   = 2
+    healthy_threshold   = 5
     unhealthy_threshold = 2
-  }
-
-  tags = {
-    Name = "${var.project_name}-tg"
   }
 }
 
 resource "aws_lb_listener" "web_app_listener" {
   load_balancer_arn = aws_lb.web_app_alb.arn
-  port              = 80
-  protocol          = "HTTP"
+  port              = 443
+  protocol          = "HTTPS"
+
+  ssl_policy = "ELBSecurityPolicy-2016-08" # Choose the desired policy
+
+  certificate_arn = "arn:aws:acm:us-east-1:650251683434:certificate/05c425b3-3dc0-4abf-a04d-4b345653a0a2" # Replace with your ACM certificate's ARN
 
   default_action {
     type             = "forward"
@@ -272,6 +273,107 @@ data "aws_ami" "custom_ami" {
     values = ["available"]
   }
 }
+########################################################################################################
+
+####################################################################################################
+
+############################### ADDING KMS ###############################################
+
+resource "aws_kms_key" "ec2_kms_key" {
+  description         = "KMS key for EC2 instances"
+  key_usage           = "ENCRYPT_DECRYPT"
+  enable_key_rotation = true
+}
+
+resource "aws_kms_key" "rds_kms_key" {
+  description         = "KMS key for RDS instances"
+  key_usage           = "ENCRYPT_DECRYPT"
+  enable_key_rotation = true
+}
+
+resource "aws_kms_key" "s3_kms_key" {
+  description         = "KMS key for S3 buckets"
+  key_usage           = "ENCRYPT_DECRYPT"
+  enable_key_rotation = true
+}
+
+resource "aws_kms_key" "secrets_kms_key" {
+  description         = "KMS key for Secrets Manager"
+  key_usage           = "ENCRYPT_DECRYPT"
+  enable_key_rotation = true
+}
+
+
+resource "random_password" "db_password" {
+  length  = 16
+  special = false
+}
+
+resource "random_uuid" "secret_manager_uuid" {}
+
+resource "aws_secretsmanager_secret" "db_secret" {
+  name        = "webapp-${substr(random_uuid.secret_manager_uuid.result, 0, 8)}"
+  description = "Database password for the RDS instance"
+  kms_key_id  = aws_kms_key.secrets_kms_key.arn
+}
+
+resource "aws_secretsmanager_secret_version" "db_secret_version" {
+  secret_id = aws_secretsmanager_secret.db_secret.id
+  secret_string = jsonencode({
+    region      = var.aws_region
+    s3bucket    = aws_s3_bucket.private_bucket.id
+    sendgridapi = var.send_grid_api_key
+    domain      = "${var.aws_profile}.${var.domain_name}"
+    host        = aws_db_instance.main_rds.endpoint
+    port        = var.db_port
+    dbname      = var.db_name
+    username    = var.db_username
+    password    = random_password.db_password.result
+  })
+}
+
+data "aws_caller_identity" "current" {}
+
+resource "aws_iam_policy" "secrets_manager_policy" {
+  name        = "SecretsManagerAccess"
+  description = "Allow EC2 instance to access Secrets Manager and decrypt using KMS"
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Effect = "Allow",
+        Action = [
+          "secretsmanager:GetSecretValue",
+          "secretsmanager:DescribeSecret"
+        ],
+
+        # Resource = "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:Webapp-*"
+        Resource = "*"
+
+      },
+      {
+        Effect = "Allow",
+        "Action" : [
+          "kms:GenerateDataKey",
+          "kms:Decrypt",
+          "kms:Encrypt",
+          "kms:DescribeKey"
+        ],
+        Resource = "*"
+
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "secrets_manager_attachment" {
+  role       = aws_iam_role.combined_role.name
+  policy_arn = aws_iam_policy.secrets_manager_policy.arn
+}
+
+##########################################################################################
+
+
 
 resource "aws_launch_template" "web_app_launch_template" {
   name          = "${var.project_name}-launch-template"
@@ -292,24 +394,95 @@ resource "aws_launch_template" "web_app_launch_template" {
     enabled = true
   }
 
+
+
+
   user_data = base64encode(<<-EOF
               #!/bin/bash
-              # Write environment variables to a file in /opt/csye6225
-              echo "DB_HOST=${aws_db_instance.main_rds.endpoint}" >> /opt/csye6225/App_Test/app.env
-              echo "DB_USER=${var.db_username}" >> /opt/csye6225/App_Test/app.env
-              echo "DB_PASSWORD=${var.db_password}" >> /opt/csye6225/App_Test/app.env
-              echo "DB_NAME=${var.db_name}" >> /opt/csye6225/App_Test/app.env
-              echo "DB_PORT=${var.db_port}" >> /opt/csye6225/App_Test/app.env
-              echo "S3_BUCKET_NAME=${aws_s3_bucket.private_bucket.id}" >> /opt/csye6225/App_Test/app.env
-              echo "SNS_TOPIC_ARN=${aws_sns_topic.user_verification.arn}" >> /opt/csye6225/App_Test/app.env
-              echo "Region=${var.aws_region}" >> /opt/csye6225/App_Test/app.env 
-              # Make the file readable by your application (adjust permissions as needed)
-              sudo chown csye6225:csye6225 /opt/csye6225/App_Test/app.env
-              chmod 644 /opt/csye6225/App_Test/app.env
-              # Running the cloud watch
-              sudo /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -c file:/opt/csye6225/App_Test/amazon-cloudwatch-agent.json -s
+              # Update package manager and install required dependencies
+              sudo apt update -y
+              sudo apt install -y unzip jq || {
+                echo "Failed to install unzip or jq via apt. Exiting." >> /tmp/user-data-error.log
+                exit 1
+              }
+
+              # Check if AWS CLI is installed
+              if ! command -v aws &> /dev/null; then
+                echo "AWS CLI not found. Installing manually." >> /tmp/user-data-error.log
+                
+                # Download and install AWS CLI
+                curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+                unzip awscliv2.zip
+                sudo ./aws/install || {
+                  echo "Failed to install AWS CLI manually. Exiting." >> /tmp/user-data-error.log
+                  exit 1
+                }
+                
+                # Clean up installation files
+                rm -rf awscliv2.zip aws
+              fi
+
+              # Verify AWS CLI installation
+              aws --version || {
+                echo "AWS CLI installation verification failed. Exiting." >> /tmp/user-data-error.log
+                exit 1
+              }
+
+
+              
+
+              REGION=${var.aws_region}
+              SECRET_NAME="${aws_secretsmanager_secret.db_secret.name}"
+              echo "**SECRET NAME: $SECRET_NAME" >> /tmp/user-data-error.log;
+
+              # Retrieve the secret from Secrets Manager
+              SECRET=$(aws secretsmanager get-secret-value --region $REGION --secret-id $SECRET_NAME --query SecretString --output text)
+
+
+              DB_USERNAME=$(echo $SECRET | jq -r '.username')
+              DB_PASSWORD=$(echo $SECRET | jq -r '.password')
+              DB_NAME=$(echo $SECRET | jq -r '.dbname')
+              DB_HOST=$(echo $SECRET | jq -r '.host')
+              DB_PORT=$(echo $SECRET | jq -r '.port')
+              DOMAIN=$(echo $SECRET | jq -r '.domain')
+              SENDGRID_API_KEY=$(echo $SECRET | jq -r '.sendgridapi')
+              AWS_REGION=$(echo $SECRET | jq -r '.region')
+              S3_BUCKET_NAME=$(echo $SECRET | jq -r '.s3bucket')
+
+
+              # Validate extracted values
+              if [ -z "$DB_USERNAME" ]; then echo "DB_USERNAME is empty" >> /tmp/user-data-error.log; fi
+              if [ -z "$DB_PASSWORD" ]; then echo "DB_PASSWORD is empty" >> /tmp/user-data-error.log; fi
+              if [ -z "$DB_NAME" ]; then echo "DB_NAME is empty" >> /tmp/user-data-error.log; fi
+              if [ -z "$DB_HOST" ]; then echo "DB_HOST is empty" >> /tmp/user-data-error.log; fi
+
+              
+              # Write the secrets to the environment file
+              echo "DB_USER=$DB_USERNAME" >> /opt/csye6225/App_Test/app.env
+              echo "DB_PASSWORD=$DB_PASSWORD" >> /opt/csye6225/App_Test/app.env
+              echo "DB_NAME=$DB_NAME" >> /opt/csye6225/App_Test/app.env
+              echo "DB_HOST=$DB_HOST" >> /opt/csye6225/App_Test/app.env
+              echo "DB_PORT=$DB_PORT" >> /opt/csye6225/App_Test/app.env
+              echo "Region=$AWS_REGION" >> /opt/csye6225/App_Test/app.env
+              echo "S3_BUCKET_NAME=$S3_BUCKET_NAME" >> /opt/csye6225/App_Test/app.env
+              echo "secret_name = ${aws_secretsmanager_secret.db_secret.name}" >> /opt/csye6225/App_Test/app.env
+              echo "SNS_TOPIC_ARN = ${aws_sns_topic.user_verification.arn}" >> /opt/csye6225/App_Test/app.env
+
+              # The CloudWatch agent is started with the specified configuration.
+
+              sudo systemctl reload daemon-reload
+
+              sudo systemctl restart my_fastapi_app.service
+
+              sudo /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl \
+                -a fetch-config \
+                -m ec2 \
+                -c file:/opt/csye6225/App/amazon-cloudwatch-agent.json \
+                -s
               EOF
   )
+
+
 
   tag_specifications {
     resource_type = "instance"
@@ -321,9 +494,9 @@ resource "aws_launch_template" "web_app_launch_template" {
 
 resource "aws_autoscaling_group" "web_app_asg" {
   name                      = "custom_autoscaling_group"
-  desired_capacity          = 3
+  desired_capacity          = 1
   max_size                  = 5
-  min_size                  = 3
+  min_size                  = 1
   vpc_zone_identifier       = aws_subnet.public_subnets[*].id
   health_check_type         = "EC2"
   health_check_grace_period = 60
@@ -416,9 +589,9 @@ resource "aws_cloudwatch_metric_alarm" "cpu_low" {
 #**************************************************************************************************************************************
 
 
-#*****************************************This needs to be changed to launh template****************************************************
+#This needs to be changed to launh template***************************************************
 
-#*****************************************This needs to be changed to launh template****************************************************
+#This needs to be changed to launh template***************************************************
 
 resource "random_uuid" "bucket_uuid" {}
 
@@ -480,7 +653,7 @@ resource "aws_iam_policy" "s3_access_policy" {
           "logs:DescribeLogStreams"
         ],
         Resource : [
-          "arn:aws:logs:*:*:*"
+          "arn:aws:logs:::*"
         ]
       },
       {
@@ -553,7 +726,9 @@ resource "aws_iam_role_policy_attachment" "sns_policy_attachment" {
 #Lambda Function and SNS
 
 resource "aws_sns_topic" "user_verification" {
-  name = "user-verification-topic"
+  name              = "user-verification-topic"
+  kms_master_key_id = aws_kms_key.secrets_kms_key.arn
+
 }
 
 data "archive_file" "lambda_zip" {
@@ -623,7 +798,13 @@ resource "aws_iam_policy" "lambda_exec_policy" {
           "cloudwatch:PutMetricData",
           "logs:CreateLogGroup",
           "logs:CreateLogStream",
-          "logs:PutLogEvents"
+          "logs:PutLogEvents",
+          "secretsmanager:GetSecretValue",
+          "secretsmanager:DescribeSecret",
+          "kms:GenerateDataKey",
+          "kms:Decrypt",
+          "kms:Encrypt",
+          "kms:DescribeKey"
         ],
         Resource = "*"
       },
